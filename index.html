@@ -152,7 +152,7 @@ table.tbl tbody tr:last-child td{border-bottom:none}
 }
 .hamb{display:none;background:var(--primary);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:16px}
 @media print{
-  #sidebar,#topbar,.no-print,.btn{display:none !important}
+  #sidebar,#topbar,.no-print,.btn,.floating-actions{display:none !important}
   #main{margin-left:0}
   #content{padding:0}
   .card{border:none;box-shadow:none;padding:0}
@@ -206,6 +206,17 @@ body.dark .empty{color:#64748b}
 .sync-status.syncing{background:#f59e0b}
 .sync-status.synced{background:#16a34a}
 .sync-status.failed{background:#dc2626}
+.floating-actions{position:fixed;bottom:22px;right:22px;display:flex;gap:12px;
+  z-index:100;flex-wrap:wrap;justify-content:flex-end;max-width:calc(100vw - 40px)}
+.floating-actions .btn{padding:12px 20px;font-size:13.5px;border-radius:50px;
+  box-shadow:0 8px 22px rgba(15,23,42,.22);font-weight:700}
+.floating-actions .btn.primary{box-shadow:0 8px 22px rgba(15,118,110,.35)}
+.floating-actions .btn.accent{box-shadow:0 8px 22px rgba(245,158,11,.35)}
+body.dark .floating-actions .btn{box-shadow:0 8px 22px rgba(0,0,0,.5)}
+@media(max-width:600px){
+  .floating-actions{bottom:14px;right:14px;gap:8px}
+  .floating-actions .btn{padding:10px 14px;font-size:12px}
+}
 </style>
 </head>
 <body>
@@ -240,7 +251,7 @@ body.dark .empty{color:#64748b}
       </div>
     </div>
     <nav class="sb-menu" id="sbMenu"></nav>
-    <div class="sb-foot">v3.0 &middot; Supabase Multi-DB</div>
+    <div class="sb-foot">v3.3 &middot; Supabase Multi-DB</div>
   </aside>
   <div id="main">
     <div id="topbar"></div>
@@ -293,17 +304,48 @@ const BULAN    = ['Januari','Februari','Maret','April','Mei','Juni','Juli',
                   'Agustus','September','Oktober','November','Desember'];
 const ALL_UNITS = ['yayasan','maba','sd','tk'];
 
-const KATEGORI_MASUK  = ['Infaq/Donasi','Zakat','Wakaf','Bantuan Yayasan','Lain-lain'];
-const KATEGORI_KELUAR = ['ATK','Honor','Transport','Konsumsi','Perbaikan','Operasional','Peng. SDM','Setor Yayasan','Lain-lain'];
+/* Kategori Transaksi Dasar (nama internal/lama) */
+const KATEGORI_MASUK_BASE  = ['Infaq/Donasi','Zakat','Wakaf','Bantuan Yayasan','Lain-lain'];
+const KATEGORI_KELUAR_BASE = ['ATK','Honor','Transport','Konsumsi','Perbaikan','Operasional','Peng. SDM','Setor Yayasan','Lain-lain'];
+
+/* Kategori yang dikecualikan dari objek pajak (UU PPh Pasal 4 ayat 3)
+   mencakup nama lama & nama baru agar kompatibel */
+const KATEGORI_BUKAN_OBJEK_PAJAK = [
+  'Infaq/Donasi','Zakat','Wakaf',
+  'Bantuan Yayasan',            /* nama lama */
+  'Setor Unit ke Yayasan',      /* nama baru (masuk untuk yayasan) */
+  'Bantuan Yayasan ke Unit'     /* nama baru (masuk untuk unit) */
+];
+
+/* Helper: kategori pemasukan yang ditampilkan sesuai konteks unit */
+function kategoriMasuk(unit){
+  const tipe = UNITS[unit]?.tipe;
+  return KATEGORI_MASUK_BASE.map(k=>{
+    if(k === 'Bantuan Yayasan'){
+      return tipe === 'yayasan' ? 'Setor Unit ke Yayasan' : 'Bantuan Yayasan ke Unit';
+    }
+    return k;
+  });
+}
+/* Helper: kategori pengeluaran yang ditampilkan sesuai konteks unit */
+function kategoriKeluar(unit){
+  const tipe = UNITS[unit]?.tipe;
+  return KATEGORI_KELUAR_BASE.map(k=>{
+    if(k === 'Setor Yayasan'){
+      return tipe === 'yayasan' ? 'Bantuan Yayasan ke Unit' : 'Setor Unit ke Yayasan';
+    }
+    return k;
+  });
+}
 
 function defaultDB(){
   return {
     users:{},
     settings:{
-      yayasan:{ nama:'Yayasan Mutiara Islam Prembun',   alamat:'Prembun, Kebumen, Jawa Tengah', ketua:'', bendahara:'', logo:'' },
-      maba   :{ nama:'Masjid Abu Bakar As Sidieq',       alamat:'Prembun, Kebumen',              ketua:'', bendahara:'', logo:'' },
-      sd     :{ nama:"Ma'had SD Mutiara Islam Prembun",  alamat:'Prembun, Kebumen',              ketua:'', bendahara:'', logo:'' },
-      tk     :{ nama:"Ma'had TK Mutiara Islam Prembun",  alamat:'Prembun, Kebumen',              ketua:'', bendahara:'', logo:'' }
+      yayasan:{ nama:'Yayasan Mutiara Islam Prembun',   alamat:'Prembun, Kebumen, Jawa Tengah', ketua:'', bendahara:'', logo:'', npwp:'' },
+      maba   :{ nama:'Masjid Abu Bakar As Sidieq',       alamat:'Prembun, Kebumen',              ketua:'', bendahara:'', logo:'', npwp:'' },
+      sd     :{ nama:"Ma'had SD Mutiara Islam Prembun",  alamat:'Prembun, Kebumen',              ketua:'', bendahara:'', logo:'', npwp:'' },
+      tk     :{ nama:"Ma'had TK Mutiara Islam Prembun",  alamat:'Prembun, Kebumen',              ketua:'', bendahara:'', logo:'', npwp:'' }
     },
     years     : { yayasan:[], maba:[], sd:[], tk:[] },
     transaksi : [],
@@ -379,7 +421,6 @@ async function loadFromSupabase(unitsToLoad){
   DB = defaultDB();
   state.loadedUnits = [...unitsToLoad];
 
-  /* --- Load users dari kedua DB --- */
   const [r1, r2] = await Promise.all([
     sb1.from('app_users').select('*'),
     sb2.from('app_users').select('*')
@@ -400,7 +441,6 @@ async function loadFromSupabase(unitsToLoad){
   });
   DB.users = usersMap;
 
-  /* --- Load data unit --- */
   const promises = unitsToLoad.map(u =>
     supabaseClientFor(u).from('app_units').select('*').eq('unit_key', u).maybeSingle()
   );
@@ -884,7 +924,7 @@ function updateLoginLogo(){
 }
 
 /* =========================================================
-   7. AUTENTIKASI (LOGIN SUPABASE)
+   7. AUTENTIKASI
    ========================================================= */
 async function doLogin(e){
   e.preventDefault();
@@ -983,15 +1023,14 @@ function menusFor(){
       { id:'transaksi',       label:'Transaksi',             ico:'💵' },
       { id:'event',           label:'Event/Donasi',          ico:'🎉' },
       { id:'persetujuan',     label:'Persetujuan Anggaran',  ico:'✅' },
-      { id:'laporan',         label:'Laporan',               ico:'📈' },
-      { id:'laporanKeuangan', label:'Laporan Keuangan',      ico:'💰' }
+      { id:'laporan',         label:'Laporan',               ico:'📈' }
     ];
   }
   if(role === 'ketua'){
     return [
       { id:'dashboard',       label:'Dashboard',             ico:'📊' },
+      { id:'laporan',         label:'Laporan',               ico:'📈' },
       { id:'laporanKetua',    label:'Laporan Lengkap',       ico:'📚' },
-      { id:'laporanKeuangan', label:'Laporan Keuangan',      ico:'💰' },
       { id:'persetujuan',     label:'Persetujuan Anggaran',  ico:'✅' }
     ];
   }
@@ -1003,13 +1042,12 @@ function menusFor(){
     { id:'tahun',     label:labelTahun(unit),   ico:'📅' }
   ];
   if(tipe === 'mahad'){
+    m.push({ id:'guru',            label:'Data Guru',           ico:'👨‍🏫' });
     m.push({ id:'siswa',           label:'Data Siswa',          ico:'👨‍🎓' });
     m.push({ id:'transaksi',       label:'Transaksi',           ico:'💵' });
-    m.push({ id:'pembayaran',      label:'Pembayaran Siswa',    ico:'💳' });
     m.push({ id:'event',           label:'Event/Donasi',        ico:'🎉' });
     m.push({ id:'permohonan',      label:'Permohonan Dana',     ico:'📤' });
     m.push({ id:'laporan',         label:'Laporan',             ico:'📈' });
-    m.push({ id:'laporanKeuangan', label:'Laporan Keuangan',    ico:'💰' });
     return m;
   }
   m.push({ id:'transaksi',       label:'Transaksi',           ico:'💵' });
@@ -1017,7 +1055,6 @@ function menusFor(){
   if(tipe === 'yayasan') m.push({ id:'persetujuan', label:'Persetujuan Anggaran', ico:'✅' });
   else                   m.push({ id:'permohonan',  label:'Permohonan Dana',      ico:'📤' });
   m.push({ id:'laporan',         label:'Laporan',             ico:'📈' });
-  m.push({ id:'laporanKeuangan', label:'Laporan Keuangan',    ico:'💰' });
   return m;
 }
 function renderSidebar(){
@@ -1079,6 +1116,8 @@ function renderPage(){
     case 'seting'      : html = pageSeting();      break;
     case 'tahun'       : html = pageTahun();       break;
     case 'transaksi'   : html = pageTransaksi();   break;
+    case 'guru'        : html = pageGuru();        break;
+    case 'gajiGuru'    : html = pageGajiGuru();    break;
     case 'siswa'       : html = pageSiswa();       break;
     case 'pembayaran'  : html = pagePembayaran();  break;
     case 'rekapPemb'   : html = pageRekapPemb();   break;
@@ -1089,7 +1128,6 @@ function renderPage(){
     case 'persetujuan' : html = pagePersetujuan(); break;
     case 'laporan'     : html = pageLaporan();     break;
     case 'laporanKetua': html = pageLaporanKetua(); break;
-    case 'laporanKeuangan': html = pageLaporanKeuangan(); break;
     case 'laporanMasjid':   html = pageLaporanKeuangan('maba'); break;
     case 'laporanYayasan':  html = pageLaporanKeuangan('yayasan'); break;
     default            : html = '<div class="card">Halaman tidak ditemukan.</div>';
@@ -1099,7 +1137,28 @@ function renderPage(){
 }
 
 /* =========================================================
-   6. DASHBOARD
+   FLOATING ACTIONS DASHBOARD
+   ========================================================= */
+function dashboardFloatingButtons(){
+  const u = state.ctxUnit;
+  const tipe = UNITS[u].tipe;
+  const role = state.user.role;
+  if(role === 'jamaah' || role === 'ketua') return '';
+
+  let btns = '';
+  if(tipe === 'mahad'){
+    btns = `
+      <button class="btn accent" onclick="formPembayaranModal()">💳 Pembayaran Siswa</button>
+      <button class="btn primary" onclick="formTransaksiModal()">➕ Input Transaksi</button>`;
+  } else if(tipe === 'yayasan' || tipe === 'unit'){
+    btns = `<button class="btn primary" onclick="formTransaksiModal()">➕ Input Transaksi</button>`;
+  }
+  if(!btns) return '';
+  return `<div class="floating-actions no-print">${btns}</div>`;
+}
+
+/* =========================================================
+   DASHBOARD
    ========================================================= */
 function pageDashboard(){
   const u = state.ctxUnit;
@@ -1202,11 +1261,15 @@ function pageDashboard(){
         <td class="c no-print"><button class="btn xs danger" onclick="hapusEvent('${e.id}')">Hapus</button></td>
       </tr>`).join('')}</tbody></table></div></div>`;
   }
+
+  html += dashboardFloatingButtons();
+  html += `<div style="height:80px"></div>`;
+
   return html;
 }
 
 /* =========================================================
-   7. TAHUN
+   TAHUN
    ========================================================= */
 function pageTahun(){
   const u = state.ctxUnit;
@@ -1400,7 +1463,7 @@ function doGantiTahun(){
 }
 
 /* =========================================================
-   8. SETING
+   SETING
    ========================================================= */
 function pageSeting(){
   if(state.user.role === 'admin') return pageSetingAdmin();
@@ -1429,11 +1492,6 @@ function pageSetingMahad(){
             <div class="mt-title">Besar Biaya Siswa</div>
             <div class="mt-desc">Atur komponen biaya per kelas secara bebas.</div>
           </div>
-          <div class="menu-tile" onclick="setSetingView('guru')">
-            <div class="mt-ico">👨‍🏫</div>
-            <div class="mt-title">Seting Guru</div>
-            <div class="mt-desc">Data guru dan besaran gaji (berlaku mulai).</div>
-          </div>
           <div class="menu-tile" onclick="setSetingView('backup')">
             <div class="mt-ico">💾</div>
             <div class="mt-title">Backup &amp; Restore</div>
@@ -1456,7 +1514,6 @@ function pageSetingMahad(){
 
   if(view === 'identitas') return `<div class="card"><h3>🏫 Identitas Lembaga <span class="h3-actions">${backBtn}</span></h3>${formIdentitas(s, labelKetua, labelBend)}</div>`;
   if(view === 'biaya')     return `<div class="card"><h3>💰 Besar Biaya Siswa <span class="h3-actions">${backBtn}</span></h3>${formBiayaMahad(u)}</div>`;
-  if(view === 'guru')      return `<div class="card"><h3>👨‍🏫 Seting Guru <span class="h3-actions">${backBtn}</span></h3>${viewSetingGuru(u)}</div>`;
   if(view === 'backup')    return `<div class="card"><h3>💾 Backup &amp; Restore <span class="h3-actions">${backBtn}</span></h3>${pageBackupRestore(u)}</div>`;
   if(view === 'password')  return `<div class="card"><h3>🔒 Ganti Password <span class="h3-actions">${backBtn}</span></h3>${formPassword()}</div>`;
 
@@ -1478,6 +1535,9 @@ function pageSetingUmum(){
 }
 
 function formIdentitas(s, labelKetua, labelBend){
+  const u = state.ctxUnit;
+  const tipe = UNITS[u].tipe;
+  const showNpwp = (tipe === 'yayasan');
   return `
     <form onsubmit="simpanSeting(event)">
       <div class="form-grid">
@@ -1487,6 +1547,9 @@ function formIdentitas(s, labelKetua, labelBend){
           <input id="stKetua" value="${esc(s.ketua||'')}"></div>
         <div class="form-row"><label>${labelBend}</label>
           <input id="stBendahara" value="${esc(s.bendahara||'')}"></div>
+        ${showNpwp ? `
+        <div class="form-row"><label>NPWP Yayasan</label>
+          <input id="stNpwp" value="${esc(s.npwp||'')}" placeholder="00.000.000.0-000.000"></div>` : ''}
       </div>
       <div class="form-row"><label>Alamat</label>
         <textarea id="stAlamat">${esc(s.alamat||'')}</textarea></div>
@@ -1615,9 +1678,25 @@ function formPassword(){
 }
 
 /* =========================================================
-   8b. SETING GURU
+   DATA GURU
    ========================================================= */
-function viewSetingGuru(u){
+function pageGuru(){
+  const u = state.ctxUnit;
+  return `
+  <div class="card no-print">
+    <h3>👨‍🏫 Data Guru
+      <span class="h3-actions">
+        <button class="btn sm purple" onclick="go('gajiGuru')">💼 Pembayaran Gaji Guru</button>
+      </span>
+    </h3>
+    <div class="hint">Kelola data guru dan besaran gaji. Untuk melakukan pembayaran gaji bulanan, klik tombol <strong>💼 Pembayaran Gaji Guru</strong> di atas.</div>
+  </div>
+  <div class="card">
+    ${viewDataGuru(u)}
+  </div>`;
+}
+
+function viewDataGuru(u){
   const gurus = DB.guru.filter(g=>g.unit===u)
     .sort((a,b)=> (a.nama||'').localeCompare(b.nama||''));
 
@@ -1797,7 +1876,111 @@ function hapusGaji(id){
 }
 
 /* =========================================================
-   8c. SETING ADMIN
+   PEMBAYARAN GAJI GURU (via Data Guru)
+   ========================================================= */
+function pageGajiGuru(){
+  const u = state.ctxUnit;
+  const fBulan = FILTER.ggBulan || '';
+  const fGuru  = FILTER.ggGuru  || '';
+
+  const gurus = DB.guru.filter(g=>g.unit===u).sort((a,b)=> (a.nama||'').localeCompare(b.nama||''));
+
+  let data = DB.gajiPembayaran.filter(p=>p.unit===u);
+  if(fBulan) data = data.filter(p=>p.bulan===fBulan);
+  if(fGuru)  data = data.filter(p=>p.guruId===fGuru);
+  data.sort((a,b)=> (a.tanggal||'') < (b.tanggal||'') ? 1 : -1);
+
+  const total = data.reduce((a,b)=>a+Number(b.jumlah),0);
+
+  const rows = data.map((p,i)=>{
+    const g = DB.guru.find(x=>x.id===p.guruId);
+    return `<tr>
+      <td class="c">${i+1}</td>
+      <td>${fmtTgl(p.tanggal)}</td>
+      <td><strong>${esc(g?g.nama:'(dihapus)')}</strong></td>
+      <td>${esc(g?g.jabatan:'-')}</td>
+      <td class="c">${esc(bulanLabel(p.bulan))}</td>
+      <td>${esc(p.keterangan||'-')}</td>
+      <td class="r keluar">${rp(p.jumlah)}</td>
+      <td class="c no-print">
+        <button class="btn xs danger" onclick="hapusGajiPembayaran('${p.id}')">Hapus</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="card no-print">
+    <h3>💼 Pembayaran Gaji Guru
+      <span class="h3-actions">
+        <button class="btn sm ghost" onclick="go('guru')">← Data Guru</button>
+        <button class="btn sm purple" onclick="modalBayarGaji()">💼 Bayar Gaji Guru</button>
+        <button class="btn sm" onclick="expGajiPembayaran()">⬇ Excel</button>
+      </span>
+    </h3>
+    <div class="filters">
+      <div><label>Filter Bulan</label>
+        <input type="month" value="${esc(fBulan)}" onchange="setFilter('ggBulan',this.value)"></div>
+      <div style="min-width:220px"><label>Filter Guru</label>
+        <select onchange="setFilter('ggGuru',this.value)">
+          <option value="">Semua Guru</option>
+          ${gurus.map(g=>`<option value="${g.id}" ${g.id===fGuru?'selected':''}>${esc(g.nama)}</option>`).join('')}
+        </select></div>
+      <button class="btn ghost sm" onclick="setFilter('ggBulan',''); setFilter('ggGuru','')">↺ Reset</button>
+    </div>
+    <div class="hint">Menampilkan riwayat pembayaran gaji guru. Klik <strong>Bayar Gaji Guru</strong> untuk membayar gaji bulanan.</div>
+  </div>
+
+  <div class="cards">
+    <div class="stat purple"><span>Total Pembayaran Gaji</span><strong>${rp(total)}</strong><small>${data.length} transaksi</small></div>
+    <div class="stat amber"><span>Jumlah Pembayaran</span><strong>${num(data.length)}</strong></div>
+    <div class="stat"><span>Jumlah Guru</span><strong>${num(gurus.length)}</strong></div>
+  </div>
+
+  <div class="card">
+    <h3>📜 Riwayat Pembayaran Gaji</h3>
+    ${data.length ? `<div class="tbl-wrap"><table class="tbl">
+      <thead><tr>
+        <th class="c" style="width:40px">No</th>
+        <th>Tanggal</th>
+        <th>Nama Guru</th>
+        <th>Jabatan</th>
+        <th class="c">Periode Bulan</th>
+        <th>Keterangan</th>
+        <th class="r">Jumlah</th>
+        <th class="c no-print">Aksi</th>
+      </tr></thead>
+      <tbody>${rows}
+        <tr class="tot-row"><td colspan="6">TOTAL</td><td class="r">${rp(total)}</td><td class="no-print"></td></tr>
+      </tbody></table></div>` : `<div class="empty">Belum ada pembayaran gaji pada filter ini.</div>`}
+  </div>`;
+}
+
+function hapusGajiPembayaran(id){
+  const p = DB.gajiPembayaran.find(x=>x.id===id);
+  if(!p) return;
+  if(!confirm('Hapus pembayaran gaji ini? Transaksi terkait juga akan dihapus.')) return;
+  DB.gajiPembayaran = DB.gajiPembayaran.filter(x=>x.id!==id);
+  DB.transaksi = DB.transaksi.filter(t=>t.refId !== id);
+  saveDB(); toast('Dihapus','ok'); render();
+}
+
+function expGajiPembayaran(){
+  const u = state.ctxUnit;
+  const fBulan = FILTER.ggBulan || '';
+  const fGuru  = FILTER.ggGuru  || '';
+  let data = DB.gajiPembayaran.filter(p=>p.unit===u);
+  if(fBulan) data = data.filter(p=>p.bulan===fBulan);
+  if(fGuru)  data = data.filter(p=>p.guruId===fGuru);
+  data.sort((a,b)=> (a.tanggal||'') < (b.tanggal||'') ? -1 : 1);
+  exportExcel('pembayaran_gaji_'+u, ['No','Tanggal','Nama Guru','Jabatan','Bulan','Keterangan','Jumlah'],
+    data.map((p,i)=>{
+      const g = DB.guru.find(x=>x.id===p.guruId);
+      return [i+1, fmtTgl(p.tanggal), g?g.nama:'(dihapus)', g?g.jabatan:'-', bulanLabel(p.bulan), p.keterangan||'', Number(p.jumlah)];
+    }));
+}
+
+/* =========================================================
+   SETING ADMIN
    ========================================================= */
 function pageSetingAdmin(){
   const u = state.ctxUnit;
@@ -1873,7 +2056,7 @@ function togglePasswordView(){
 }
 
 /* =========================================================
-   8d. BACKUP / RESTORE
+   BACKUP / RESTORE
    ========================================================= */
 function pageBackupRestore(unit){
   const lbl = labelTahun(unit);
@@ -2181,6 +2364,8 @@ function simpanSeting(e){
   s.ketua     = document.getElementById('stKetua').value.trim();
   s.bendahara = document.getElementById('stBendahara').value.trim();
   s.alamat    = document.getElementById('stAlamat').value.trim();
+  const npwpEl = document.getElementById('stNpwp');
+  if(npwpEl) s.npwp = npwpEl.value.trim();
   DB.settings[u] = s;
   saveDB(); toast('Disimpan','ok'); render();
 }
@@ -2354,8 +2539,6 @@ function dataTransFilter(){
 
 function pageTransaksi(){
   const u = state.ctxUnit;
-  const tipe = UNITS[u].tipe;
-  const isMahad = (tipe === 'mahad');
 
   const tahunList = (DB.years[u]||[]).map(y=>y.tahun).sort();
   if(!tahunList.length) tahunList.push(tahunAktif(u));
@@ -2380,23 +2563,18 @@ function pageTransaksi(){
       <td class="r ${t.jenis==='masuk'?'masuk':'keluar'}">${rp(t.jumlah)}</td>
       <td class="c no-print">
         ${locked
-          ? `<span class="lock-badge" title="Transaksi dari pembayaran siswa. Hapus lewat menu Pembayaran Siswa.">🔒 Terkunci</span>`
+          ? `<span class="lock-badge" title="Transaksi dari pembayaran siswa/gaji. Hapus lewat menu terkait.">🔒 Terkunci</span>`
           : `<button class="btn xs" onclick="formTransaksiModal('${t.id}')">Edit</button>
              <button class="btn xs danger" onclick="hapusTrans('${t.id}')">Hapus</button>`}
       </td>
     </tr>`;
   }).join('');
 
-  const gajiBtn = isMahad
-    ? `<button class="btn sm purple" onclick="modalBayarGaji()">💼 Bayar Gaji Guru</button>`
-    : '';
-
   return `
   <div class="card no-print">
     <h3>💵 Transaksi
       <span class="h3-actions">
         <button class="btn sm primary" onclick="formTransaksiModal()">➕ Input Transaksi</button>
-        ${gajiBtn}
       </span>
     </h3>
     <div class="filters">
@@ -2457,7 +2635,7 @@ function resetFilterTrans(){
 function formTransaksiModal(id){
   const t = id ? DB.transaksi.find(x=>x.id===id) : null;
   if(id && !t){ toast('Transaksi tidak ditemukan','error'); return; }
-  if(t && t.refId){ toast('Transaksi pembayaran siswa terkunci','error'); return; }
+  if(t && t.refId){ toast('Transaksi terkunci','error'); return; }
 
   const jenis = t ? t.jenis : 'masuk';
   showModal(t?'Edit Transaksi':'Input Transaksi', `
@@ -2481,14 +2659,27 @@ function formTransaksiModal(id){
 
   setTimeout(()=>{
     updateKategoriOptions();
-    if(t) document.getElementById('txKategori').value = t.kategori;
+    if(t){
+      const sel = document.getElementById('txKategori');
+      // Jika kategori lama (migrasi) tidak ada di opsi, tambahkan agar tetap tampil
+      if(!Array.from(sel.options).some(o=>o.value===t.kategori)){
+        const opt = document.createElement('option');
+        opt.value = t.kategori; opt.textContent = t.kategori;
+        sel.appendChild(opt);
+      }
+      sel.value = t.kategori;
+    }
   }, 10);
 }
 function updateKategoriOptions(){
   const jenis = document.getElementById('txJenis').value;
-  const opts = jenis==='masuk' ? KATEGORI_MASUK : KATEGORI_KELUAR;
+  const u = state.ctxUnit;
+  const baseOpts = jenis==='masuk' ? kategoriMasuk(u) : kategoriKeluar(u);
+  const opts = baseOpts.slice();
   const sel = document.getElementById('txKategori');
   const cur = sel.value;
+  // Pertahankan nilai yang sedang aktif meskipun dari kategori lama
+  if(cur && !opts.includes(cur)) opts.push(cur);
   sel.innerHTML = '<option value="">-- Pilih Kategori --</option>' +
     opts.map(o=>`<option value="${esc(o)}" ${o===cur?'selected':''}>${esc(o)}</option>`).join('');
 }
@@ -2527,7 +2718,7 @@ function hapusTrans(id){
   const t = DB.transaksi.find(x=>x.id===id);
   if(!t) return;
   if(t.refId){
-    toast('Transaksi dari pembayaran siswa terkunci. Hapus lewat menu Pembayaran Siswa.','error');
+    toast('Transaksi terkunci. Hapus lewat menu terkait.','error');
     return;
   }
   if(!confirm('Hapus transaksi?')) return;
@@ -2563,7 +2754,7 @@ function cetakTrans(){
 }
 
 /* =========================================================
-   9b. BAYAR GAJI GURU
+   BAYAR GAJI GURU (Modal)
    ========================================================= */
 function modalBayarGaji(){
   const u = state.ctxUnit;
@@ -2621,7 +2812,7 @@ function refreshBayarGajiRows(){
     .sort((a,b)=> (a.nama||'').localeCompare(b.nama||''));
 
   if(!gurus.length){
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">Belum ada guru aktif. Tambahkan di Seting → Seting Guru.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Belum ada guru aktif. Tambahkan di menu Data Guru.</td></tr>';
     updateBayarGajiTotal();
     return;
   }
@@ -2699,55 +2890,98 @@ function simpanBayarGaji(){
 }
 
 /* =========================================================
-   10. DATA SISWA
+   10. DATA SISWA (menampilkan data + tombol Pembayaran Siswa)
    ========================================================= */
 function pageSiswa(){
   const u = state.ctxUnit;
+  return `
+  <div class="card no-print">
+    <h3>👨‍🎓 Data Siswa
+      <span class="h3-actions">
+        <button class="btn sm purple" onclick="go('pembayaran')">💳 Pembayaran Siswa</button>
+      </span>
+    </h3>
+    <div class="hint">Kelola data siswa di sini. Untuk input pembayaran atau melihat riwayat pembayaran siswa, klik tombol <strong>💳 Pembayaran Siswa</strong> di atas.</div>
+  </div>
+  <div class="card">
+    ${viewDataSiswa(u)}
+  </div>`;
+}
+
+function viewDataSiswa(u){
   const fKelas = FILTER.swKelas || '';
 
   let list = DB.siswa.filter(s=>s.unit===u);
   if(fKelas) list = list.filter(s=>s.tingkat===fKelas);
   list.sort((a,b)=> (a.tingkat+'').localeCompare(b.tingkat+'') || a.nama.localeCompare(b.nama));
 
-  const rows = list.map((s,i)=>`<tr>
-    <td class="c">${i+1}</td>
-    <td>${esc(s.nis)}</td>
-    <td><strong>${esc(s.nama)}</strong></td>
-    <td class="c">${esc(s.tingkat)}</td>
-    <td>${esc(s.wali||'-')}</td>
-    <td>${esc(s.kontak||'-')}</td>
-    <td class="c"><span class="badge ${s.status==='Aktif'?'ok':(s.status==='Lulus'?'info':'no')}">${esc(s.status||'Aktif')}</span></td>
-    <td class="c no-print">
-      <button class="btn xs" onclick="editSiswa('${s.id}')">Edit</button>
-      <button class="btn xs danger" onclick="hapusSiswa('${s.id}')">Hapus</button>
-    </td>
-  </tr>`).join('');
+  const rows = list.map((s,i)=>{
+    const tag = hitungTagihan(u, s);
+    const bay = hitungBayar(s.id);
+    const lunas = tag > 0 && bay >= tag;
+    const statusBayar = tag <= 0
+      ? '<span class="badge info">—</span>'
+      : (lunas ? '<span class="badge ok">Lunas</span>'
+              : (bay>0 ? '<span class="badge pending">Kurang</span>'
+                       : '<span class="badge no">Belum</span>'));
+    return `<tr>
+      <td class="c">${i+1}</td>
+      <td>${esc(s.nis)}</td>
+      <td><strong>${esc(s.nama)}</strong></td>
+      <td class="c">${esc(s.tingkat)}</td>
+      <td>${esc(s.wali||'-')}</td>
+      <td>${esc(s.kontak||'-')}</td>
+      <td class="c"><span class="badge ${s.status==='Aktif'?'ok':(s.status==='Lulus'?'info':'no')}">${esc(s.status||'Aktif')}</span></td>
+      <td class="c">${statusBayar}</td>
+      <td class="c no-print">
+        <button class="btn xs" onclick="editSiswa('${s.id}')">✎ Edit</button>
+        <button class="btn xs danger" onclick="hapusSiswa('${s.id}')">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
 
   return `
-  <div class="card">
-    <h3>👨‍🎓 Data Siswa (${list.length})
-      <span class="h3-actions no-print">
-        <button class="btn sm primary" onclick="formTambahSiswaModal()">➕ Tambah Siswa</button>
-        <button class="btn sm" onclick="downloadTemplateSiswa()">📄 Template</button>
-        <label class="btn sm accent" style="margin:0">📥 Import
-          <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importSiswa(event)">
-        </label>
-        <button class="btn sm" onclick="expSiswa()">⬇ Excel</button>
-        <button class="btn sm" onclick="cetakSiswa()">🖨 Cetak</button>
-      </span>
-    </h3>
-    <div class="filters no-print" style="margin-bottom:14px">
-      <div><label>Kelas</label>
-        <select onchange="setFilter('swKelas',this.value)">
-          <option value="">Semua Kelas</option>
-          ${TINGKAT[u].map(t=>`<option value="${esc(t)}" ${t===fKelas?'selected':''}>Kelas ${esc(t)}</option>`).join('')}
-        </select></div>
-      ${fKelas ? `<button class="btn ghost sm" onclick="setFilter('swKelas','')">↺ Reset</button>` : ''}
+    <div class="info-box">
+      ℹ️ Menu ini untuk mengelola data siswa. Input pembayaran per siswa dapat dilakukan pada menu <strong>💳 Pembayaran Siswa</strong>.
+      Status <strong>Bayar</strong> menampilkan ringkasan apakah siswa sudah lunas atau belum.
     </div>
-    ${list.length ? `<div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th class="c" style="width:40px">No</th><th>NIS</th><th>Nama</th><th class="c">Tkt</th><th>Wali</th><th>Kontak</th><th class="c">Status</th><th class="c no-print">Aksi</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>` : `<div class="empty">${fKelas ? 'Tidak ada siswa di kelas ini.' : 'Belum ada siswa.'}</div>`}
-  </div>`;
+    <div class="card" style="border:none;box-shadow:none;padding:0;margin-bottom:14px">
+      <div class="form-actions" style="justify-content:space-between;align-items:center">
+        <button class="btn primary" onclick="formTambahSiswaModal()">➕ Tambah Siswa</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn sm" onclick="downloadTemplateSiswa()">📄 Template</button>
+          <label class="btn sm accent" style="margin:0">📥 Import
+            <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importSiswa(event)">
+          </label>
+          <button class="btn sm" onclick="expSiswa()">⬇ Excel</button>
+          <button class="btn sm" onclick="cetakSiswa()">🖨 Cetak</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="border:none;box-shadow:none;padding:0">
+      <h3>Daftar Siswa (${list.length})
+        <span class="h3-actions">
+          <select onchange="setFilter('swKelas',this.value)" style="max-width:180px;padding:5px 10px;font-size:12px;margin:0">
+            <option value="">Semua Kelas</option>
+            ${TINGKAT[u].map(t=>`<option value="${esc(t)}" ${t===fKelas?'selected':''}>Kelas ${esc(t)}</option>`).join('')}
+          </select>
+        </span>
+      </h3>
+      ${list.length ? `<div class="tbl-wrap"><table class="tbl">
+        <thead><tr>
+          <th class="c" style="width:40px">No</th>
+          <th>NIS</th>
+          <th>Nama</th>
+          <th class="c">Tkt</th>
+          <th>Wali</th>
+          <th>Kontak</th>
+          <th class="c">Status</th>
+          <th class="c">Bayar</th>
+          <th class="c no-print">Aksi</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>` : `<div class="empty">${fKelas ? 'Tidak ada siswa di kelas ini.' : 'Belum ada siswa. Klik "Tambah Siswa" untuk memulai.'}</div>`}
+    </div>`;
 }
 
 function formTambahSiswaModal(){
@@ -2810,9 +3044,11 @@ function simpanEditSiswa(id){
   saveDB(); closeModal(); toast('Diperbarui','ok'); render();
 }
 function hapusSiswa(id){
-  if(!confirm('Hapus siswa ini?')) return;
+  if(!confirm('Hapus siswa ini? Semua pembayaran terkait akan dihapus juga.')) return;
   DB.siswa = DB.siswa.filter(s=>s.id!==id);
+  const payIds = DB.pembayaran.filter(p=>p.siswaId===id).map(p=>p.id);
   DB.pembayaran = DB.pembayaran.filter(p=>p.siswaId!==id);
+  DB.transaksi = DB.transaksi.filter(t=>!payIds.includes(t.refId));
   saveDB(); toast('Dihapus','ok'); render();
 }
 function importSiswa(ev){
@@ -2946,6 +3182,7 @@ function pagePembayaran(){
   <div class="card no-print">
     <h3>💳 Pembayaran Siswa
       <span class="h3-actions">
+        <button class="btn sm ghost" onclick="go('siswa')">← Data Siswa</button>
         <button class="btn sm primary" onclick="formPembayaranModal()">➕ Input Pembayaran</button>
         <button class="btn sm accent" onclick="go('rekapPemb')">📋 Rekap Pembayaran</button>
         <button class="btn sm purple" onclick="go('detailPemb')">🔍 Detail Pembayaran</button>
@@ -3041,7 +3278,7 @@ function pageRekapPemb(){
   <div class="card no-print">
     <h3>📋 Rekap Pembayaran Siswa
       <span class="h3-actions">
-        <button class="btn sm" onclick="go('pembayaran')">← Pembayaran</button>
+        <button class="btn sm" onclick="go('siswa')">← Data Siswa</button>
         <button class="btn sm" onclick="expRekap()">⬇ Excel</button>
         <button class="btn sm" onclick="cetakRekap()">🖨 Cetak</button>
       </span>
@@ -3172,7 +3409,7 @@ function pageDetailPemb(){
   <div class="card no-print">
     <h3>🔍 Detail Pembayaran Siswa
       <span class="h3-actions">
-        <button class="btn sm" onclick="go('pembayaran')">← Pembayaran</button>
+        <button class="btn sm" onclick="go('siswa')">← Data Siswa</button>
         <button class="btn sm" onclick="go('rekapPemb')">📋 Rekap</button>
       </span>
     </h3>
@@ -3883,8 +4120,9 @@ function setujuiPermohonan(id){
   const eventKet = p.eventNama ? ' - ' + p.eventNama : '';
 
   if(p.jenis === 'minta'){
+    /* Yayasan mengeluarkan dana bantuan ke unit */
     const ketY = keteranganDenganCatatan('Bantuan ' + nmShort.toLowerCase() + eventKet, p.keterangan);
-    tambahTransaksi('yayasan', thY, tgl, 'keluar', 'Bantuan Yayasan', p.jumlah, ketY);
+    tambahTransaksi('yayasan', thY, tgl, 'keluar', 'Bantuan Yayasan ke Unit', p.jumlah, ketY);
 
     if(p.eventId){
       DB.eventTrans.push({
@@ -3894,11 +4132,13 @@ function setujuiPermohonan(id){
       });
     } else {
       const ketU = keteranganDenganCatatan('Dana dari Yayasan', p.keterangan);
-      tambahTransaksi(p.dari, thU, tgl, 'masuk', 'Bantuan Yayasan', p.jumlah, ketU);
+      /* Unit menerima dana bantuan dari yayasan */
+      tambahTransaksi(p.dari, thU, tgl, 'masuk', 'Bantuan Yayasan ke Unit', p.jumlah, ketU);
     }
   } else {
+    /* Yayasan menerima setoran dari unit */
     const ketY = keteranganDenganCatatan('Setoran ' + nmShort.toLowerCase() + eventKet, p.keterangan);
-    tambahTransaksi('yayasan', thY, tgl, 'masuk', 'Lain-lain', p.jumlah, ketY);
+    tambahTransaksi('yayasan', thY, tgl, 'masuk', 'Setor Unit ke Yayasan', p.jumlah, ketY);
 
     if(p.eventId){
       DB.eventTrans.push({
@@ -3908,7 +4148,8 @@ function setujuiPermohonan(id){
       });
     } else {
       const ketU = keteranganDenganCatatan('Setoran ke Yayasan', p.keterangan);
-      tambahTransaksi(p.dari, thU, tgl, 'keluar', 'Setor Yayasan', p.jumlah, ketU);
+      /* Unit menyetorkan dana ke yayasan */
+      tambahTransaksi(p.dari, thU, tgl, 'keluar', 'Setor Unit ke Yayasan', p.jumlah, ketU);
     }
   }
 
@@ -3923,21 +4164,36 @@ function tolakPermohonan(id){
 }
 
 /* =========================================================
-   15. LAPORAN (per unit)
+   15. LAPORAN
    ========================================================= */
 function pageLaporan(){
   const u = state.ctxUnit;
   const tipe = UNITS[u].tipe;
+  const role = state.user.role;
+
   const jenisOpts = [
     { v:'kas',      l:'Laporan Arus Kas (Detail)' },
     { v:'rekapkas', l:'Laporan Rekapitulasi Arus Kas' },
     { v:'kategori', l:'Laporan Rekap per Kategori' },
+    { v:'keuangan', l:'Laporan Keuangan (Ringkasan)' },
     { v:'event',    l:'Laporan Event / Donasi' }
   ];
   if(tipe === 'yayasan') jenisOpts.push({ v:'unit', l:'Rekap Saldo Seluruh Unit' });
+  if(tipe === 'yayasan' && role !== 'jamaah') jenisOpts.push({ v:'pajak', l:'Laporan Pajak (SPT PPh Badan)' });
   if(tipe === 'mahad')   jenisOpts.push({ v:'siswa', l:'Laporan Pembayaran Siswa' });
 
   const jenis = FILTER.lapJenis || 'kas';
+
+  if(jenis === 'keuangan'){
+    return renderLaporanJenisSelector(jenisOpts, jenis) + pageLaporanKeuangan(u);
+  }
+  if(jenis === 'pajak'){
+    if(role === 'jamaah'){
+      return '<div class="card"><div class="empty">Anda tidak memiliki akses ke halaman ini.</div></div>';
+    }
+    return renderLaporanJenisSelector(jenisOpts, jenis) + pageLaporanPajak(u);
+  }
+
   const th = FILTER.lapTahun || tahunAktif(u);
   const bl = FILTER.lapBulan || '';
   const tahunList = Array.from(new Set([
@@ -4253,6 +4509,570 @@ function pageLaporan(){
   return html;
 }
 
+function renderLaporanJenisSelector(jenisOpts, jenis){
+  return `<div class="card no-print">
+    <h3>📈 Parameter Laporan</h3>
+    <div class="filters">
+      <div><label>Jenis Laporan</label>
+        <select onchange="setFilter('lapJenis',this.value)">
+          ${jenisOpts.map(o=>`<option value="${o.v}" ${o.v===jenis?'selected':''}>${esc(o.l)}</option>`).join('')}
+        </select></div>
+    </div>
+  </div>`;
+}
+
+/* =========================================================
+   15b. LAPORAN KEUANGAN
+   ========================================================= */
+function pageLaporanKeuangan(unitOverride){
+  const u = unitOverride || state.ctxUnit;
+  const th = FILTER.lkTh || tahunAktif(u);
+  const bl = FILTER.lkBulan || '';
+
+  const tahunList = Array.from(new Set([
+    ...(DB.years[u]||[]).map(y=>y.tahun),
+    ...DB.transaksi.filter(t=>t.unit===u).map(t=>t.tahun),
+    currentTahun(u)
+  ])).sort();
+
+  let kasAwal = saldoAwal(u, th);
+  if(bl){
+    DB.transaksi.filter(t=>t.unit===u && t.tahun===th && (t.tanggal||'').slice(5,7) < bl)
+      .forEach(t=> kasAwal += t.jenis==='masuk' ? Number(t.jumlah) : -Number(t.jumlah));
+  }
+
+  let data = DB.transaksi.filter(t=>t.unit===u && t.tahun===th);
+  if(bl) data = data.filter(t=>(t.tanggal||'').slice(5,7)===bl);
+
+  const katMap = {};
+  data.forEach(t=>{
+    katMap[t.kategori] = katMap[t.kategori] || { masuk:0, keluar:0 };
+    if(t.jenis==='masuk') katMap[t.kategori].masuk += Number(t.jumlah);
+    else katMap[t.kategori].keluar += Number(t.jumlah);
+  });
+  const keys = Object.keys(katMap).sort();
+  const totalMasuk = keys.reduce((a,k)=>a+katMap[k].masuk,0);
+  const totalKeluar = keys.reduce((a,k)=>a+katMap[k].keluar,0);
+  const saldoAkhir = kasAwal + totalMasuk - totalKeluar;
+  const periodeLbl = bl ? `${BULAN[Number(bl)-1]} ${th}` : `Tahun ${th}`;
+  const isOverride = !!unitOverride;
+
+  const katRows = keys.length ? keys.map((k,i)=>{
+    const r = katMap[k];
+    const sub = r.masuk - r.keluar;
+    return `<tr>
+      <td class="c">${i+1}</td>
+      <td><strong>${esc(k)}</strong></td>
+      <td class="r masuk">${r.masuk?rp(r.masuk):'-'}</td>
+      <td class="r keluar">${r.keluar?rp(r.keluar):'-'}</td>
+      <td class="r ${sub>=0?'masuk':'keluar'}"><strong>${rp(sub)}</strong></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" class="empty">Tidak ada transaksi pada periode ini.</td></tr>`;
+
+  const judul = isOverride ? 'Laporan Keuangan — ' + UNITS[u].nama : 'Laporan Keuangan';
+
+  const filterHtml = isOverride ? '' : `
+    <div class="card no-print"><h3>💰 ${esc(judul)}</h3>
+      <div class="filters">
+        <div><label>Tahun</label>
+          <select onchange="setFilter('lkTh',this.value)">
+            ${tahunList.map(t=>`<option value="${t}" ${t===th?'selected':''}>${esc(t)}</option>`).join('')}
+          </select></div>
+        <div><label>Periode</label>
+          <select onchange="setFilter('lkBulan',this.value)">
+            <option value="">Tahunan</option>
+            ${BULAN.map((b,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${String(i+1).padStart(2,'0')===bl?'selected':''}>${b}</option>`).join('')}
+          </select></div>
+        <div><label>&nbsp;</label>
+          <button class="btn sm" onclick="expLapKeuangan('${u}')">⬇ Excel</button></div>
+        <div><label>&nbsp;</label>
+          <button class="btn sm" onclick="cetakLapKeuangan('${u}')">🖨 Cetak/PDF</button></div>
+      </div>
+      <div class="hint">Menampilkan kas awal, arus kas per kategori, dan saldo akhir untuk unit <strong>${esc(UNITS[u].nama)}</strong>.</div>
+    </div>`;
+
+  const actionHtml = isOverride ? `
+    <div class="form-actions no-print" style="margin-bottom:14px">
+      <button class="btn sm" onclick="expLapKeuangan('${u}')">⬇ Excel</button>
+      <button class="btn sm" onclick="cetakLapKeuangan('${u}')">🖨 Cetak/PDF</button>
+    </div>` : '';
+
+  return `
+  ${filterHtml}
+  ${actionHtml}
+  <div class="cards">
+    <div class="stat"><span>Kas Awal</span><strong>${rp(kasAwal)}</strong><small>${esc(periodeLbl)}</small></div>
+    <div class="stat green"><span>Total Pemasukan</span><strong>${rp(totalMasuk)}</strong></div>
+    <div class="stat red"><span>Total Pengeluaran</span><strong>${rp(totalKeluar)}</strong></div>
+    <div class="stat amber"><span>Saldo Akhir</span><strong>${rp(saldoAkhir)}</strong></div>
+  </div>
+
+  <div class="card">
+    <h3>📊 Arus Kas per Kategori — ${esc(periodeLbl)}</h3>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr>
+        <th class="c" style="width:40px">No</th>
+        <th>Kategori</th>
+        <th class="r">Pemasukan</th>
+        <th class="r">Pengeluaran</th>
+        <th class="r">Subtotal</th>
+      </tr></thead>
+      <tbody>
+        <tr class="tot-row">
+          <td class="c"></td>
+          <td><strong>KAS AWAL</strong></td>
+          <td class="r" colspan="2">—</td>
+          <td class="r"><strong>${rp(kasAwal)}</strong></td>
+        </tr>
+        ${katRows}
+        <tr class="tot-row">
+          <td class="c"></td>
+          <td><strong>SALDO AKHIR</strong></td>
+          <td class="r masuk">${rp(totalMasuk)}</td>
+          <td class="r keluar">${rp(totalKeluar)}</td>
+          <td class="r"><strong>${rp(saldoAkhir)}</strong></td>
+        </tr>
+      </tbody>
+    </table></div>
+    <div class="hint">Saldo Akhir = Kas Awal + Total Pemasukan − Total Pengeluaran.</div>
+  </div>`;
+}
+
+function expLapKeuangan(unit){
+  const u = unit || state.ctxUnit;
+  const th = FILTER.lkTh || tahunAktif(u);
+  const bl = FILTER.lkBulan || '';
+
+  let kasAwal = saldoAwal(u, th);
+  if(bl){
+    DB.transaksi.filter(t=>t.unit===u && t.tahun===th && (t.tanggal||'').slice(5,7) < bl)
+      .forEach(t=> kasAwal += t.jenis==='masuk' ? Number(t.jumlah) : -Number(t.jumlah));
+  }
+  let data = DB.transaksi.filter(t=>t.unit===u && t.tahun===th);
+  if(bl) data = data.filter(t=>(t.tanggal||'').slice(5,7)===bl);
+
+  const katMap = {};
+  data.forEach(t=>{
+    katMap[t.kategori] = katMap[t.kategori] || { masuk:0, keluar:0 };
+    if(t.jenis==='masuk') katMap[t.kategori].masuk += Number(t.jumlah);
+    else katMap[t.kategori].keluar += Number(t.jumlah);
+  });
+  const keys = Object.keys(katMap).sort();
+  const totalMasuk = keys.reduce((a,k)=>a+katMap[k].masuk,0);
+  const totalKeluar = keys.reduce((a,k)=>a+katMap[k].keluar,0);
+  const saldoAkhir = kasAwal + totalMasuk - totalKeluar;
+
+  const rows = [['', 'KAS AWAL', '', '', kasAwal]];
+  keys.forEach((k,i)=>{
+    const r = katMap[k];
+    rows.push([i+1, k, r.masuk, r.keluar, r.masuk - r.keluar]);
+  });
+  rows.push(['', 'SALDO AKHIR', totalMasuk, totalKeluar, saldoAkhir]);
+
+  const suffix = (bl?('_'+bl):'') + '_' + th;
+  exportExcel('laporan_keuangan_'+u+suffix,
+    ['No','Kategori','Pemasukan','Pengeluaran','Subtotal'], rows);
+}
+
+function cetakLapKeuangan(unit){
+  const u = unit || state.ctxUnit;
+  const th = FILTER.lkTh || tahunAktif(u);
+  const bl = FILTER.lkBulan || '';
+
+  let kasAwal = saldoAwal(u, th);
+  if(bl){
+    DB.transaksi.filter(t=>t.unit===u && t.tahun===th && (t.tanggal||'').slice(5,7) < bl)
+      .forEach(t=> kasAwal += t.jenis==='masuk' ? Number(t.jumlah) : -Number(t.jumlah));
+  }
+  let data = DB.transaksi.filter(t=>t.unit===u && t.tahun===th);
+  if(bl) data = data.filter(t=>(t.tanggal||'').slice(5,7)===bl);
+
+  const katMap = {};
+  data.forEach(t=>{
+    katMap[t.kategori] = katMap[t.kategori] || { masuk:0, keluar:0 };
+    if(t.jenis==='masuk') katMap[t.kategori].masuk += Number(t.jumlah);
+    else katMap[t.kategori].keluar += Number(t.jumlah);
+  });
+  const keys = Object.keys(katMap).sort();
+  const totalMasuk = keys.reduce((a,k)=>a+katMap[k].masuk,0);
+  const totalKeluar = keys.reduce((a,k)=>a+katMap[k].keluar,0);
+  const saldoAkhir = kasAwal + totalMasuk - totalKeluar;
+
+  const rows = [['', 'KAS AWAL', '-', '-', rp(kasAwal)]];
+  keys.forEach((k,i)=>{
+    const r = katMap[k];
+    rows.push([i+1, k, rp(r.masuk), rp(r.keluar), rp(r.masuk - r.keluar)]);
+  });
+  rows.push(['', 'SALDO AKHIR', rp(totalMasuk), rp(totalKeluar), rp(saldoAkhir)]);
+
+  const periodeLbl = bl ? `${BULAN[Number(bl)-1]} ${th}` : `Tahun ${th}`;
+  const tglAkhir = tanggalAkhirPeriode(u, { th, bl });
+  cetakPDF('LAPORAN KEUANGAN', 'Periode: ' + periodeLbl,
+    ['No','Kategori','Pemasukan','Pengeluaran','Subtotal'],
+    rows, null, u, { tanggal: tglAkhir });
+}
+
+/* =========================================================
+   15c. LAPORAN PAJAK (SPT PPh Badan)
+   ========================================================= */
+function hitungDataPajak(unit, tahun){
+  const data = DB.transaksi.filter(t=>t.unit===unit && t.tahun===tahun);
+  const katMasuk = {}, katKeluar = {};
+  data.forEach(t=>{
+    if(t.jenis==='masuk') katMasuk[t.kategori] = (katMasuk[t.kategori]||0) + Number(t.jumlah);
+    else katKeluar[t.kategori] = (katKeluar[t.kategori]||0) + Number(t.jumlah);
+  });
+
+  const totalMasuk = Object.values(katMasuk).reduce((a,b)=>a+b,0);
+  const totalKeluar = Object.values(katKeluar).reduce((a,b)=>a+b,0);
+
+  const rincianMasuk = Object.entries(katMasuk)
+    .map(([kat,jml])=>({ kategori:kat, jumlah:jml,
+      objekPajak: !KATEGORI_BUKAN_OBJEK_PAJAK.includes(kat) }))
+    .sort((a,b)=> (a.objekPajak===b.objekPajak) ? 0 : (a.objekPajak ? -1 : 1));
+  const rincianKeluar = Object.entries(katKeluar)
+    .map(([kat,jml])=>({ kategori:kat, jumlah:jml }))
+    .sort((a,b)=> b.jumlah - a.jumlah);
+
+  const penerimaanObjek = rincianMasuk.filter(r=>r.objekPajak).reduce((a,b)=>a+b.jumlah,0);
+  const penerimaanNonObjek = totalMasuk - penerimaanObjek;
+  const biayaFiskal = totalKeluar;
+  const penghasilanNetoKomersial = totalMasuk - totalKeluar;
+  const penghasilanNetoFiskal = Math.max(0, penerimaanObjek - biayaFiskal);
+  const tarif = 0.22;
+  const pphTerutang = penghasilanNetoFiskal * tarif;
+
+  return {
+    data, katMasuk, katKeluar, rincianMasuk, rincianKeluar,
+    totalMasuk, totalKeluar, penerimaanObjek, penerimaanNonObjek,
+    biayaFiskal, penghasilanNetoKomersial, penghasilanNetoFiskal,
+    tarif, pphTerutang
+  };
+}
+
+function pageLaporanPajak(unit){
+  const u = unit || 'yayasan';
+  const th = FILTER.pajakTahun || tahunAktif(u);
+  const tahunList = Array.from(new Set([
+    ...(DB.years[u]||[]).map(y=>y.tahun),
+    ...DB.transaksi.filter(t=>t.unit===u).map(t=>t.tahun),
+    currentTahun(u)
+  ])).sort();
+
+  const d = hitungDataPajak(u, th);
+  const s = DB.settings[u] || {};
+
+  return `
+  <div class="card no-print">
+    <h3>🧾 Laporan Pajak — SPT Tahunan PPh Badan
+      <span class="h3-actions">
+        <button class="btn sm" onclick="cetakLaporanPajak('${u}')">🖨 Cetak/PDF</button>
+        <button class="btn sm" onclick="expLaporanPajak('${u}')">⬇ Excel</button>
+      </span>
+    </h3>
+    <div class="filters">
+      <div><label>Tahun Pajak</label>
+        <select onchange="setFilter('pajakTahun',this.value)">
+          ${tahunList.map(t=>`<option value="${t}" ${t===th?'selected':''}>${esc(t)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="info-box">
+      ℹ️ Laporan ini disusun mengikuti format <strong>SPT Tahunan PPh Badan (Form 1771)</strong>
+      sesuai ketentuan Direktorat Jenderal Pajak. Untuk Yayasan/Lembaga Sosial,
+      penerimaan berupa <em>${KATEGORI_BUKAN_OBJEK_PAJAK.join(', ')}</em> dikategorikan sebagai
+      <strong>penghasilan bukan objek pajak</strong> sesuai UU PPh Pasal 4 ayat (3).
+      <br><br>
+      ⚠️ Laporan ini bersifat <strong>informatif</strong> berdasarkan data transaksi internal.
+      Untuk pelaporan resmi SPT Tahunan, silakan konsultasikan dengan konsultan pajak
+      atau lengkapi dengan dokumen pendukung sesuai ketentuan DJP.
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="text-align:center;margin-bottom:18px">
+      <div style="font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.5px">
+        SPT TAHUNAN PPh BADAN
+      </div>
+      <div style="font-size:13px;color:#475569;margin-top:2px">
+        Lampiran I — Penghitungan Penghasilan Neto Fiskal
+      </div>
+      <div style="font-size:12.5px;color:#64748b;margin-top:8px;line-height:1.6">
+        <strong>${esc(s.nama || UNITS[u].nama)}</strong><br>
+        ${s.npwp ? 'NPWP: <strong>'+esc(s.npwp)+'</strong><br>' : ''}
+        Tahun Pajak: <strong>${esc(th)}</strong>
+      </div>
+    </div>
+
+    <div class="section-title">A. PENGHASILAN BRUTO / PEREDARAN USAHA</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="c" style="width:40px">No</th><th>Uraian</th><th class="c" style="width:140px">Klasifikasi</th><th class="r" style="width:150px">Jumlah</th></tr></thead>
+      <tbody>
+        ${d.rincianMasuk.length ? d.rincianMasuk.map((r,i)=>`<tr>
+          <td class="c">${i+1}</td>
+          <td>${esc(r.kategori)}</td>
+          <td class="c">${r.objekPajak ? '<span class="badge no">Objek Pajak</span>' : '<span class="badge ok">Bukan Objek</span>'}</td>
+          <td class="r">${rp(r.jumlah)}</td>
+        </tr>`).join('') : '<tr><td colspan="4" class="empty">Tidak ada data</td></tr>'}
+        <tr class="tot-row"><td class="c"></td><td colspan="2">TOTAL PENGHASILAN BRUTO</td><td class="r">${rp(d.totalMasuk)}</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="section-title">B. BIAYA UNTUK MENDAPATKAN, MENAGIH, DAN MEMELIHARA PENGHASILAN (3M)</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="c" style="width:40px">No</th><th>Uraian</th><th class="r" style="width:150px">Jumlah</th></tr></thead>
+      <tbody>
+        ${d.rincianKeluar.length ? d.rincianKeluar.map((r,i)=>`<tr>
+          <td class="c">${i+1}</td>
+          <td>${esc(r.kategori)}</td>
+          <td class="r">${rp(r.jumlah)}</td>
+        </tr>`).join('') : '<tr><td colspan="3" class="empty">Tidak ada data</td></tr>'}
+        <tr class="tot-row"><td class="c"></td><td>TOTAL BIAYA 3M</td><td class="r">${rp(d.biayaFiskal)}</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="section-title">C. PENGHASILAN NETO KOMERSIAL</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <tbody>
+        <tr><td>Penghasilan Bruto</td><td class="r" style="width:150px">${rp(d.totalMasuk)}</td></tr>
+        <tr><td>Dikurangi: Biaya 3M</td><td class="r">(${rp(d.biayaFiskal)})</td></tr>
+        <tr class="tot-row"><td>PENGHASILAN NETO KOMERSIAL</td><td class="r">${rp(d.penghasilanNetoKomersial)}</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="section-title">D. KOREKSI FISKAL</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Uraian</th><th class="r" style="width:150px">Jumlah</th></tr></thead>
+      <tbody>
+        <tr><td>Penghasilan yang bukan objek pajak (${KATEGORI_BUKAN_OBJEK_PAJAK.join('/')})</td>
+          <td class="r">(${rp(d.penerimaanNonObjek)})</td></tr>
+        <tr><td>Penghasilan objek pajak</td><td class="r">${rp(d.penerimaanObjek)}</td></tr>
+        <tr><td>Biaya 3M</td><td class="r">(${rp(d.biayaFiskal)})</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="section-title">E. PENGHASILAN NETO FISKAL</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <tbody>
+        <tr><td>Penghasilan objek pajak</td><td class="r" style="width:150px">${rp(d.penerimaanObjek)}</td></tr>
+        <tr><td>Dikurangi: Biaya 3M</td><td class="r">(${rp(d.biayaFiskal)})</td></tr>
+        <tr class="tot-row"><td>PENGHASILAN NETO FISKAL</td><td class="r">${rp(d.penghasilanNetoFiskal)}</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="section-title">F. PPh TERUTANG</div>
+    <div class="tbl-wrap"><table class="tbl">
+      <tbody>
+        <tr><td>Tarif PPh Badan (UU HPP)</td><td class="r" style="width:150px">22%</td></tr>
+        <tr><td>Penghasilan Kena Pajak</td><td class="r">${rp(d.penghasilanNetoFiskal)}</td></tr>
+        <tr class="tot-row"><td>PPh TERUTANG</td><td class="r">${rp(d.pphTerutang)}</td></tr>
+      </tbody>
+    </table></div>
+  </div>`;
+}
+
+function expLaporanPajak(unit){
+  const u = unit || 'yayasan';
+  const th = FILTER.pajakTahun || tahunAktif(u);
+  const d = hitungDataPajak(u, th);
+  const rows = [
+    ['A. PENGHASILAN BRUTO / PEREDARAN USAHA', '', ''],
+    ...d.rincianMasuk.map((r,i)=>[`  ${i+1}. ${r.kategori}`, r.objekPajak?'Objek Pajak':'Bukan Objek Pajak', r.jumlah]),
+    ['  Total Penghasilan Bruto', '', d.totalMasuk],
+    ['', '', ''],
+    ['B. BIAYA 3M', '', ''],
+    ...d.rincianKeluar.map((r,i)=>[`  ${i+1}. ${r.kategori}`, '', r.jumlah]),
+    ['  Total Biaya 3M', '', d.biayaFiskal],
+    ['', '', ''],
+    ['C. PENGHASILAN NETO KOMERSIAL', '', d.penghasilanNetoKomersial],
+    ['', '', ''],
+    ['D. KOREKSI FISKAL', '', ''],
+    ['  Bukan Objek Pajak (dikurangi)', '', -d.penerimaanNonObjek],
+    ['  Penghasilan Objek Pajak', '', d.penerimaanObjek],
+    ['', '', ''],
+    ['E. PENGHASILAN NETO FISKAL', '', d.penghasilanNetoFiskal],
+    ['', '', ''],
+    ['F. PPh TERUTANG (tarif 22%)', '', d.pphTerutang],
+  ];
+  exportExcel('laporan_pajak_'+u+'_'+th, ['Uraian','Keterangan','Jumlah'], rows);
+}
+
+function cetakLaporanPajak(unit){
+  const u = unit || 'yayasan';
+  const th = FILTER.pajakTahun || tahunAktif(u);
+  const d = hitungDataPajak(u, th);
+  const s = DB.settings[u] || {};
+
+  const w = window.open('', '_blank');
+  if(!w){ toast('Popup diblokir browser','error'); return; }
+
+  const now = new Date();
+  const tglStr = `${now.getDate()} ${BULAN[now.getMonth()]} ${now.getFullYear()}`;
+  const logoHtml = s.logo ? `<img src="${s.logo}" alt="logo">` : `<div class="kop-placeholder">🕌</div>`;
+
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Laporan Pajak ${esc(th)}</title>
+  <style>
+    @page { size: A4 portrait; margin: 1.3cm; }
+    * { box-sizing: border-box; }
+    body { font-family:'Times New Roman', Times, serif; color:#000; padding:0; margin:0; font-size:10.5pt; line-height:1.35; }
+    .kop { display:flex; align-items:center; justify-content:center; gap:20px; padding-bottom:8px; }
+    .kop img { height:78px; width:auto; }
+    .kop-placeholder { height:78px; width:78px; border-radius:50%; background:#0f766e; color:#fff;
+      display:flex; align-items:center; justify-content:center; font-size:38px; }
+    .kop-text { text-align:center; }
+    .kop-text h1 { font-size:15pt; margin:0 0 2px; font-weight:700; color:#0b3b38;
+      letter-spacing:.5px; text-transform:uppercase; }
+    .kop-text .alamat { font-size:10pt; color:#1e293b; margin:0; font-style:italic; }
+    .kop-line-double { border-top:3px double #000; margin-top:6px; margin-bottom:14px; }
+    h2.judul { text-align:center; font-size:13pt; font-weight:700; margin:0 0 2px;
+      text-transform:uppercase; letter-spacing:.5px; }
+    .sub-judul { text-align:center; font-size:11pt; font-weight:600; margin:0 0 4px; }
+    .info-pajak { text-align:center; font-size:10pt; margin-bottom:16px; line-height:1.5; }
+    .section-h { background:#e6fffa; border:1px solid #333; font-weight:700; padding:5px 8px;
+      font-size:10.5pt; text-transform:uppercase; margin-top:12px; }
+    table.data { width:100%; border-collapse:collapse; font-size:10pt; margin-bottom:6px; }
+    table.data th, table.data td { border:1px solid #333; padding:4px 6px; vertical-align:top; }
+    table.data thead th { background:#f1f5f9; font-weight:700; text-align:center;
+      font-size:9.5pt; letter-spacing:.3px; }
+    table.data td.r { text-align:right; }
+    table.data td.c { text-align:center; }
+    table.data tr.tot { font-weight:700; background:#f1f5f9; }
+    .pengesahan { margin-top:24px; page-break-inside:avoid; }
+    .pengesahan .tanggal { text-align:right; margin-bottom:6px; font-size:10.5pt; padding-right:24px; }
+    .pengesahan table.ttd { width:100%; border:none; border-collapse:collapse; margin-top:4px; }
+    .pengesahan table.ttd td { border:none; text-align:center; vertical-align:top;
+      font-size:10.5pt; padding:0; width:50%; }
+    .pengesahan .jabatan { font-weight:600; margin-bottom:2px; }
+    .pengesahan .ttd-teks { margin:6px 0; color:#1e293b; font-style:italic; font-size:10pt; }
+    .pengesahan .garis-ttd { display:inline-block; border-bottom:1px solid #333; min-width:160px; margin:44px 0 4px; }
+    .pengesahan .nama-bawah { font-weight:700; display:block; margin-top:2px; }
+    .disclaimer { font-size:9pt; font-style:italic; color:#475569; margin-top:20px; padding:8px;
+      border:1px dashed #94a3b8; background:#f8fafc; line-height:1.5; }
+    @media print { .no-print { display:none !important; } }
+  </style></head><body>
+    <div class="kop">${logoHtml}
+      <div class="kop-text">
+        <h1>${esc(s.nama || UNITS[u].nama)}</h1>
+        <p class="alamat">${esc(s.alamat || '')}</p>
+      </div>
+    </div>
+    <div class="kop-line-double"></div>
+
+    <h2 class="judul">SPT TAHUNAN PPh BADAN</h2>
+    <div class="sub-judul">Lampiran I — Penghitungan Penghasilan Neto Fiskal</div>
+    <div class="info-pajak">
+      Tahun Pajak: <strong>${esc(th)}</strong>
+      ${s.npwp ? `<br>NPWP: <strong>${esc(s.npwp)}</strong>` : ''}
+    </div>
+
+    <div class="section-h">A. Penghasilan Bruto / Peredaran Usaha</div>
+    <table class="data">
+      <thead><tr>
+        <th style="width:35px">No</th>
+        <th>Uraian</th>
+        <th style="width:120px">Klasifikasi</th>
+        <th style="width:130px">Jumlah</th>
+      </tr></thead>
+      <tbody>
+        ${d.rincianMasuk.length ? d.rincianMasuk.map((r,i)=>`<tr>
+          <td class="c">${i+1}</td>
+          <td>${esc(r.kategori)}</td>
+          <td class="c">${r.objekPajak ? 'Objek Pajak' : 'Bukan Objek Pajak'}</td>
+          <td class="r">${rp(r.jumlah)}</td>
+        </tr>`).join('') : '<tr><td colspan="4" class="c">— Tidak ada data —</td></tr>'}
+        <tr class="tot">
+          <td class="c"></td>
+          <td colspan="2">TOTAL PENGHASILAN BRUTO</td>
+          <td class="r">${rp(d.totalMasuk)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="section-h">B. Biaya untuk Mendapatkan, Menagih, dan Memelihara Penghasilan (3M)</div>
+    <table class="data">
+      <thead><tr>
+        <th style="width:35px">No</th>
+        <th>Uraian</th>
+        <th style="width:130px">Jumlah</th>
+      </tr></thead>
+      <tbody>
+        ${d.rincianKeluar.length ? d.rincianKeluar.map((r,i)=>`<tr>
+          <td class="c">${i+1}</td>
+          <td>${esc(r.kategori)}</td>
+          <td class="r">${rp(r.jumlah)}</td>
+        </tr>`).join('') : '<tr><td colspan="3" class="c">— Tidak ada data —</td></tr>'}
+        <tr class="tot">
+          <td class="c"></td>
+          <td>TOTAL BIAYA 3M</td>
+          <td class="r">${rp(d.biayaFiskal)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="section-h">C. Penghasilan Neto Komersial</div>
+    <table class="data">
+      <tbody>
+        <tr><td>Penghasilan Bruto</td><td class="r" style="width:130px">${rp(d.totalMasuk)}</td></tr>
+        <tr><td>Dikurangi: Biaya 3M</td><td class="r">(${rp(d.biayaFiskal)})</td></tr>
+        <tr class="tot"><td>PENGHASILAN NETO KOMERSIAL</td><td class="r">${rp(d.penghasilanNetoKomersial)}</td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-h">D. Koreksi Fiskal</div>
+    <table class="data">
+      <thead><tr><th>Uraian</th><th style="width:130px">Jumlah</th></tr></thead>
+      <tbody>
+        <tr><td>Penghasilan bukan objek pajak (${KATEGORI_BUKAN_OBJEK_PAJAK.join(', ')})</td>
+          <td class="r">(${rp(d.penerimaanNonObjek)})</td></tr>
+        <tr><td>Penghasilan objek pajak</td><td class="r">${rp(d.penerimaanObjek)}</td></tr>
+        <tr><td>Biaya 3M</td><td class="r">(${rp(d.biayaFiskal)})</td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-h">E. Penghasilan Neto Fiskal</div>
+    <table class="data">
+      <tbody>
+        <tr><td>Penghasilan objek pajak</td><td class="r" style="width:130px">${rp(d.penerimaanObjek)}</td></tr>
+        <tr><td>Dikurangi: Biaya 3M</td><td class="r">(${rp(d.biayaFiskal)})</td></tr>
+        <tr class="tot"><td>PENGHASILAN NETO FISKAL</td><td class="r">${rp(d.penghasilanNetoFiskal)}</td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-h">F. PPh Terutang</div>
+    <table class="data">
+      <tbody>
+        <tr><td>Tarif PPh Badan (UU HPP)</td><td class="r" style="width:130px">22%</td></tr>
+        <tr><td>Penghasilan Kena Pajak</td><td class="r">${rp(d.penghasilanNetoFiskal)}</td></tr>
+        <tr class="tot"><td>PPh TERUTANG</td><td class="r">${rp(d.pphTerutang)}</td></tr>
+      </tbody>
+    </table>
+
+    <div class="disclaimer">
+      <strong>Catatan:</strong> Laporan ini bersifat informatif berdasarkan data transaksi internal aplikasi.
+      Untuk pelaporan resmi SPT Tahunan PPh Badan, harap konsultasikan dengan konsultan pajak
+      atau lengkapi dengan dokumen pendukung sesuai ketentuan Direktorat Jenderal Pajak.
+    </div>
+
+    <div class="pengesahan">
+      <div class="tanggal">Prembun, ${esc(tglStr)}</div>
+      <table class="ttd">
+        <tr>
+          <td><div class="jabatan">Ketua Yayasan,</div>
+            <div class="ttd-teks">ttd</div><div class="garis-ttd"></div>
+            <span class="nama-bawah">${esc(s.ketua || '....................................')}</span></td>
+          <td><div class="jabatan">Bendahara,</div>
+            <div class="ttd-teks">ttd</div><div class="garis-ttd"></div>
+            <span class="nama-bawah">${esc(s.bendahara || '....................................')}</span></td>
+        </tr>
+      </table>
+    </div>
+    <script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script>
+  </body></html>`;
+  w.document.write(doc); w.document.close();
+}
+
+/* =========================================================
+   15d. EXPORT LAPORAN LAIN
+   ========================================================= */
 function expLapKas(){
   const u = state.ctxUnit;
   const th = FILTER.lapTahun||tahunAktif(u);
@@ -4598,197 +5418,6 @@ function cetakDetailUnit(un){
     data.map((t,i)=>[i+1, fmtTgl(t.tanggal), t.kategori, t.keterangan||'-',
       t.jenis==='masuk'?rp(t.jumlah):'-', t.jenis==='keluar'?rp(t.jumlah):'-']),
     ['','TOTAL','','', rp(tm), rp(tk)], un, { tanggal: tglAkhir });
-}
-
-/* =========================================================
-   16b. LAPORAN KEUANGAN
-   ========================================================= */
-function pageLaporanKeuangan(unitOverride){
-  const u = unitOverride || state.ctxUnit;
-  const th = FILTER.lkTh || tahunAktif(u);
-  const bl = FILTER.lkBulan || '';
-
-  const tahunList = Array.from(new Set([
-    ...(DB.years[u]||[]).map(y=>y.tahun),
-    ...DB.transaksi.filter(t=>t.unit===u).map(t=>t.tahun),
-    currentTahun(u)
-  ])).sort();
-
-  let kasAwal = saldoAwal(u, th);
-  if(bl){
-    DB.transaksi.filter(t=>t.unit===u && t.tahun===th && (t.tanggal||'').slice(5,7) < bl)
-      .forEach(t=> kasAwal += t.jenis==='masuk' ? Number(t.jumlah) : -Number(t.jumlah));
-  }
-
-  let data = DB.transaksi.filter(t=>t.unit===u && t.tahun===th);
-  if(bl) data = data.filter(t=>(t.tanggal||'').slice(5,7)===bl);
-
-  const katMap = {};
-  data.forEach(t=>{
-    katMap[t.kategori] = katMap[t.kategori] || { masuk:0, keluar:0 };
-    if(t.jenis==='masuk') katMap[t.kategori].masuk += Number(t.jumlah);
-    else katMap[t.kategori].keluar += Number(t.jumlah);
-  });
-  const keys = Object.keys(katMap).sort();
-  const totalMasuk = keys.reduce((a,k)=>a+katMap[k].masuk,0);
-  const totalKeluar = keys.reduce((a,k)=>a+katMap[k].keluar,0);
-  const saldoAkhir = kasAwal + totalMasuk - totalKeluar;
-  const periodeLbl = bl ? `${BULAN[Number(bl)-1]} ${th}` : `Tahun ${th}`;
-  const isOverride = !!unitOverride;
-
-  const katRows = keys.length ? keys.map((k,i)=>{
-    const r = katMap[k];
-    const sub = r.masuk - r.keluar;
-    return `<tr>
-      <td class="c">${i+1}</td>
-      <td><strong>${esc(k)}</strong></td>
-      <td class="r masuk">${r.masuk?rp(r.masuk):'-'}</td>
-      <td class="r keluar">${r.keluar?rp(r.keluar):'-'}</td>
-      <td class="r ${sub>=0?'masuk':'keluar'}"><strong>${rp(sub)}</strong></td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="5" class="empty">Tidak ada transaksi pada periode ini.</td></tr>`;
-
-  const judul = isOverride ? 'Laporan Keuangan — ' + UNITS[u].nama : 'Laporan Keuangan';
-
-  const filterHtml = isOverride ? '' : `
-    <div class="card no-print"><h3>💰 ${esc(judul)}</h3>
-      <div class="filters">
-        <div><label>Tahun</label>
-          <select onchange="setFilter('lkTh',this.value)">
-            ${tahunList.map(t=>`<option value="${t}" ${t===th?'selected':''}>${esc(t)}</option>`).join('')}
-          </select></div>
-        <div><label>Periode</label>
-          <select onchange="setFilter('lkBulan',this.value)">
-            <option value="">Tahunan</option>
-            ${BULAN.map((b,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${String(i+1).padStart(2,'0')===bl?'selected':''}>${b}</option>`).join('')}
-          </select></div>
-        <div><label>&nbsp;</label>
-          <button class="btn sm" onclick="expLapKeuangan('${u}')">⬇ Excel</button></div>
-        <div><label>&nbsp;</label>
-          <button class="btn sm" onclick="cetakLapKeuangan('${u}')">🖨 Cetak/PDF</button></div>
-      </div>
-      <div class="hint">Menampilkan kas awal, arus kas per kategori, dan saldo akhir untuk unit <strong>${esc(UNITS[u].nama)}</strong>.</div>
-    </div>`;
-
-  const actionHtml = isOverride ? `
-    <div class="form-actions no-print" style="margin-bottom:14px">
-      <button class="btn sm" onclick="expLapKeuangan('${u}')">⬇ Excel</button>
-      <button class="btn sm" onclick="cetakLapKeuangan('${u}')">🖨 Cetak/PDF</button>
-    </div>` : '';
-
-  return `
-  ${filterHtml}
-  ${actionHtml}
-  <div class="cards">
-    <div class="stat"><span>Kas Awal</span><strong>${rp(kasAwal)}</strong><small>${esc(periodeLbl)}</small></div>
-    <div class="stat green"><span>Total Pemasukan</span><strong>${rp(totalMasuk)}</strong></div>
-    <div class="stat red"><span>Total Pengeluaran</span><strong>${rp(totalKeluar)}</strong></div>
-    <div class="stat amber"><span>Saldo Akhir</span><strong>${rp(saldoAkhir)}</strong></div>
-  </div>
-
-  <div class="card">
-    <h3>📊 Arus Kas per Kategori — ${esc(periodeLbl)}</h3>
-    <div class="tbl-wrap"><table class="tbl">
-      <thead><tr>
-        <th class="c" style="width:40px">No</th>
-        <th>Kategori</th>
-        <th class="r">Pemasukan</th>
-        <th class="r">Pengeluaran</th>
-        <th class="r">Subtotal</th>
-      </tr></thead>
-      <tbody>
-        <tr class="tot-row">
-          <td class="c"></td>
-          <td><strong>KAS AWAL</strong></td>
-          <td class="r" colspan="2">—</td>
-          <td class="r"><strong>${rp(kasAwal)}</strong></td>
-        </tr>
-        ${katRows}
-        <tr class="tot-row">
-          <td class="c"></td>
-          <td><strong>SALDO AKHIR</strong></td>
-          <td class="r masuk">${rp(totalMasuk)}</td>
-          <td class="r keluar">${rp(totalKeluar)}</td>
-          <td class="r"><strong>${rp(saldoAkhir)}</strong></td>
-        </tr>
-      </tbody>
-    </table></div>
-    <div class="hint">Saldo Akhir = Kas Awal + Total Pemasukan − Total Pengeluaran.</div>
-  </div>`;
-}
-
-function expLapKeuangan(unit){
-  const u = unit || state.ctxUnit;
-  const th = FILTER.lkTh || tahunAktif(u);
-  const bl = FILTER.lkBulan || '';
-
-  let kasAwal = saldoAwal(u, th);
-  if(bl){
-    DB.transaksi.filter(t=>t.unit===u && t.tahun===th && (t.tanggal||'').slice(5,7) < bl)
-      .forEach(t=> kasAwal += t.jenis==='masuk' ? Number(t.jumlah) : -Number(t.jumlah));
-  }
-  let data = DB.transaksi.filter(t=>t.unit===u && t.tahun===th);
-  if(bl) data = data.filter(t=>(t.tanggal||'').slice(5,7)===bl);
-
-  const katMap = {};
-  data.forEach(t=>{
-    katMap[t.kategori] = katMap[t.kategori] || { masuk:0, keluar:0 };
-    if(t.jenis==='masuk') katMap[t.kategori].masuk += Number(t.jumlah);
-    else katMap[t.kategori].keluar += Number(t.jumlah);
-  });
-  const keys = Object.keys(katMap).sort();
-  const totalMasuk = keys.reduce((a,k)=>a+katMap[k].masuk,0);
-  const totalKeluar = keys.reduce((a,k)=>a+katMap[k].keluar,0);
-  const saldoAkhir = kasAwal + totalMasuk - totalKeluar;
-
-  const rows = [['', 'KAS AWAL', '', '', kasAwal]];
-  keys.forEach((k,i)=>{
-    const r = katMap[k];
-    rows.push([i+1, k, r.masuk, r.keluar, r.masuk - r.keluar]);
-  });
-  rows.push(['', 'SALDO AKHIR', totalMasuk, totalKeluar, saldoAkhir]);
-
-  const suffix = (bl?('_'+bl):'') + '_' + th;
-  exportExcel('laporan_keuangan_'+u+suffix,
-    ['No','Kategori','Pemasukan','Pengeluaran','Subtotal'], rows);
-}
-
-function cetakLapKeuangan(unit){
-  const u = unit || state.ctxUnit;
-  const th = FILTER.lkTh || tahunAktif(u);
-  const bl = FILTER.lkBulan || '';
-
-  let kasAwal = saldoAwal(u, th);
-  if(bl){
-    DB.transaksi.filter(t=>t.unit===u && t.tahun===th && (t.tanggal||'').slice(5,7) < bl)
-      .forEach(t=> kasAwal += t.jenis==='masuk' ? Number(t.jumlah) : -Number(t.jumlah));
-  }
-  let data = DB.transaksi.filter(t=>t.unit===u && t.tahun===th);
-  if(bl) data = data.filter(t=>(t.tanggal||'').slice(5,7)===bl);
-
-  const katMap = {};
-  data.forEach(t=>{
-    katMap[t.kategori] = katMap[t.kategori] || { masuk:0, keluar:0 };
-    if(t.jenis==='masuk') katMap[t.kategori].masuk += Number(t.jumlah);
-    else katMap[t.kategori].keluar += Number(t.jumlah);
-  });
-  const keys = Object.keys(katMap).sort();
-  const totalMasuk = keys.reduce((a,k)=>a+katMap[k].masuk,0);
-  const totalKeluar = keys.reduce((a,k)=>a+katMap[k].keluar,0);
-  const saldoAkhir = kasAwal + totalMasuk - totalKeluar;
-
-  const rows = [['', 'KAS AWAL', '-', '-', rp(kasAwal)]];
-  keys.forEach((k,i)=>{
-    const r = katMap[k];
-    rows.push([i+1, k, rp(r.masuk), rp(r.keluar), rp(r.masuk - r.keluar)]);
-  });
-  rows.push(['', 'SALDO AKHIR', rp(totalMasuk), rp(totalKeluar), rp(saldoAkhir)]);
-
-  const periodeLbl = bl ? `${BULAN[Number(bl)-1]} ${th}` : `Tahun ${th}`;
-  const tglAkhir = tanggalAkhirPeriode(u, { th, bl });
-  cetakPDF('LAPORAN KEUANGAN', 'Periode: ' + periodeLbl,
-    ['No','Kategori','Pemasukan','Pengeluaran','Subtotal'],
-    rows, null, u, { tanggal: tglAkhir });
 }
 
 /* =========================================================
